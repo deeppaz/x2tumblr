@@ -1,16 +1,28 @@
 """X (@miniocular) media timeline -> Tumblr. Her çalışmada kuyruktan 1 tweet'i post eder."""
+import io
 import json
 import os
+import random
 import sys
 
+import imagehash
 import requests
+from PIL import Image
 from requests_oauthlib import OAuth1
 from gallery_dl import config, extractor
 from gallery_dl.extractor.message import Message
 
 X_USER = os.environ.get("X_USER", "miniocular")
 BLOG = os.environ.get("TUMBLR_BLOG", "")
-TAGS = [t.strip() for t in os.environ.get("TUMBLR_TAGS", "").split(",") if t.strip()]
+# İlk 5 tag tracked-tag'lerde görünür -> sabit ve en güçlüler. Kalanlar havuzdan rastgele (spam gibi durmasın diye).
+CORE_TAGS = ["aesthetic", "moodboard", "quotes", "art", "mood"]
+TAG_POOL = [
+    "aesthetic blog", "mood aesthetic", "dark aesthetic", "grunge", "soft grunge", "collage", "collage art",
+    "text post", "words", "feelings", "vibes", "art blog", "digital art", "surreal", "neon", "alt aesthetic",
+    "life quotes", "thoughts", "wallpaper", "lockscreen", "tumblr aesthetic", "90s aesthetic", "graphic design",
+]
+EXTRA_TAGS = 7
+DUP_DISTANCE = 6  # phash hamming mesafesi; bunun altı = aynı görsel sayılır
 FETCH_TWEETS = int(os.environ.get("FETCH_TWEETS", "40"))  # her çalışmada taranacak son tweet sayısı
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
@@ -27,6 +39,7 @@ def load_state():
     state.setdefault("queue", [])     # {tweet_id, url, images:[{url, ext}]}
     state.setdefault("posted", [])    # {tweet_id, tumblr_id}
     state.setdefault("blocked", [])   # DMCA vs. gelirse buraya tweet_id ekle, asla post edilmez
+    state.setdefault("hashes", [])    # post edilmiş görsellerin perceptual hash'leri
     return state
 
 
@@ -60,30 +73,40 @@ def fetch_recent():
     return list(tweets.values())
 
 
-def post_to_tumblr(item):
+def pick_tags():
+    env = [t.strip() for t in os.environ.get("TUMBLR_TAGS", "").split(",") if t.strip()]
+    return env or CORE_TAGS + random.sample(TAG_POOL, EXTRA_TAGS)
+
+
+def is_dup(h, known):
+    return any(h - k <= DUP_DISTANCE for k in known)
+
+
+def post_to_tumblr(item, state):
     auth = OAuth1(
         os.environ["TUMBLR_CONSUMER_KEY"], os.environ["TUMBLR_CONSUMER_SECRET"],
         os.environ["TUMBLR_OAUTH_TOKEN"], os.environ["TUMBLR_OAUTH_SECRET"],
     )
-    files, media = {}, []
+    known = [imagehash.hex_to_hash(x) for x in state["hashes"]]
+    files, media, new_hashes = {}, [], []
     for i, img in enumerate(item["images"][:10]):
         r = requests.get(img["url"], timeout=60)
         if r.status_code == 404:
             continue
         r.raise_for_status()
+        h = imagehash.phash(Image.open(io.BytesIO(r.content)).convert("RGB"))
+        if is_dup(h, known + new_hashes):
+            print(f"tekrar görsel atlandı: {img['url']}")
+            continue
+        new_hashes.append(h)
         ident = f"img{i}"
         mime = IMAGE_EXT[img["ext"]]
         files[ident] = (f"{ident}.{img['ext']}", r.content, mime)
         media.append({"type": "image", "media": [{"type": mime, "identifier": ident}]})
     if not media:
-        return None  # görseller silinmiş
+        return None  # görseller silinmiş ya da hepsi daha önce paylaşılmış
 
-    source = "source"
-    content = media + [{
-        "type": "text", "text": source,
-        "formatting": [{"start": 0, "end": len(source), "type": "link", "url": item["url"]}],
-    }]
-    body = {"content": content, "tags": ",".join(TAGS)}
+    body = {"content": media, "tags": ",".join(pick_tags())}
     if DRY_RUN:
         print("[dry-run]", json.dumps(body)[:500])
         return "dry-run"
@@ -92,6 +115,7 @@ def post_to_tumblr(item):
     r = requests.post(f"https://api.tumblr.com/v2/blog/{BLOG}/posts", auth=auth, files=files, timeout=120)
     if r.status_code >= 300:
         raise RuntimeError(f"Tumblr {r.status_code}: {r.text[:500]}")
+    state["hashes"].extend(str(h) for h in new_hashes)
     return str(r.json()["response"].get("id"))
 
 
@@ -115,14 +139,14 @@ def main():
             state["queue"].pop(0)
             continue
         try:
-            post_id = post_to_tumblr(item)
+            post_id = post_to_tumblr(item, state)
         except Exception as e:
             print(f"post hatası ({item['tweet_id']}): {e}", file=sys.stderr)
             exit_code = 1  # kuyrukta kalır, sonraki çalışmada tekrar denenir
             break
         state["queue"].pop(0)
         if post_id is None:
-            print(f"atlandı (görsel yok): {item['url']}")
+            print(f"atlandı (görsel yok/tekrar): {item['url']}")
             continue
         if not DRY_RUN:
             state["posted"].append({"tweet_id": item["tweet_id"], "tumblr_id": post_id})
