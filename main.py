@@ -13,6 +13,7 @@ from requests_oauthlib import OAuth1
 from gallery_dl import config, extractor
 from curl_cffi import requests as cffi
 from gallery_dl.extractor.message import Message
+from gallery_dl.extractor.twitter import TwitterAPI
 from gallery_dl.extractor.utils.twitter_transaction_id import ClientTransaction
 
 X_USER = os.environ.get("X_USER", "miniocular")
@@ -57,21 +58,44 @@ def save_state(state):
 _ct_initialize = ClientTransaction.initialize
 
 
+class _NoTransaction:
+    def generate_transaction_id(self, method, path):
+        return None
+
+
 def _ct_initialize_cffi(self, extractor, homepage=None):
     """gallery-dl x.com/home'u requests ile çekiyor, GitHub IP'lerinde Cloudflare 403 dönüyor.
     Sayfayı Chrome TLS parmak iziyle çekip ct0 çerezini extractor'a aktar."""
     if homepage is None:
-        r = cffi.get("https://x.com/home", impersonate="chrome", timeout=30,
-                     cookies={"auth_token": os.environ["X_AUTH_TOKEN"]})
-        r.raise_for_status()
-        homepage = r.text
-        ct0 = r.cookies.get("ct0")
-        if ct0:
-            extractor.cookies.set("ct0", ct0, domain=extractor.cookies_domain)
+        for url in ("https://x.com/home", "https://twitter.com/home"):
+            r = cffi.get(url, impersonate="chrome", timeout=30,
+                         cookies={"auth_token": os.environ["X_AUTH_TOKEN"]})
+            print(f"homepage {url}: {r.status_code}")
+            if r.ok:
+                homepage = r.text
+                ct0 = r.cookies.get("ct0")
+                if ct0:
+                    extractor.cookies.set("ct0", ct0, domain=extractor.cookies_domain)
+                break
+        else:
+            raise RuntimeError("homepage alınamadı")
     return _ct_initialize(self, extractor, homepage)
 
 
 ClientTransaction.initialize = _ct_initialize_cffi
+_client_transaction = TwitterAPI._client_transaction
+
+
+def _client_transaction_or_none(self):
+    # Homepage hiç alınamazsa transaction-id'siz dene; API çoğu uç noktada yine kabul ediyor.
+    try:
+        return _client_transaction(self)
+    except Exception as e:
+        print(f"transaction-id devre dışı: {e!r}", file=sys.stderr)
+        return _NoTransaction()
+
+
+TwitterAPI._client_transaction = _client_transaction_or_none
 
 
 def fetch_recent():
