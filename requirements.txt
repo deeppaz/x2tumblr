@@ -3,3 +3,4 @@ requests
 requests-oauthlib
 imagehash
 Pillow
+curl_cffi

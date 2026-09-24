@@ -11,7 +11,9 @@ import requests
 from PIL import Image
 from requests_oauthlib import OAuth1
 from gallery_dl import config, extractor
+from curl_cffi import requests as cffi
 from gallery_dl.extractor.message import Message
+from gallery_dl.extractor.utils.twitter_transaction_id import ClientTransaction
 
 X_USER = os.environ.get("X_USER", "miniocular")
 BLOG = os.environ.get("TUMBLR_BLOG", "")
@@ -50,6 +52,26 @@ def load_state():
 def save_state(state):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=2, ensure_ascii=False)
+
+
+_ct_initialize = ClientTransaction.initialize
+
+
+def _ct_initialize_cffi(self, extractor, homepage=None):
+    """gallery-dl x.com/home'u requests ile çekiyor, GitHub IP'lerinde Cloudflare 403 dönüyor.
+    Sayfayı Chrome TLS parmak iziyle çekip ct0 çerezini extractor'a aktar."""
+    if homepage is None:
+        r = cffi.get("https://x.com/home", impersonate="chrome", timeout=30,
+                     cookies={"auth_token": os.environ["X_AUTH_TOKEN"]})
+        r.raise_for_status()
+        homepage = r.text
+        ct0 = r.cookies.get("ct0")
+        if ct0:
+            extractor.cookies.set("ct0", ct0, domain=extractor.cookies_domain)
+    return _ct_initialize(self, extractor, homepage)
+
+
+ClientTransaction.initialize = _ct_initialize_cffi
 
 
 def fetch_recent():

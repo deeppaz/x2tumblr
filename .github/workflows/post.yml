@@ -9,6 +9,10 @@ on:
         description: "4 saat beklemeden post et"
         type: boolean
         default: false
+      dry_run:
+        description: "Sadece dene, Tumblr'a post atma"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -28,6 +32,7 @@ jobs:
       - run: python main.py
         env:
           X_AUTH_TOKEN: ${{ secrets.X_AUTH_TOKEN }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
           FORCE: ${{ inputs.force && '1' || '' }}
           TUMBLR_BLOG: ${{ vars.TUMBLR_BLOG }}
           TUMBLR_TAGS: ${{ vars.TUMBLR_TAGS }}
