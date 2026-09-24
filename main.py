@@ -4,6 +4,7 @@ import json
 import os
 import random
 import sys
+import time
 
 import imagehash
 import requests
@@ -25,6 +26,9 @@ EXTRA_TAGS = 7
 DUP_DISTANCE = 6  # phash hamming mesafesi; bunun altı = aynı görsel sayılır
 FETCH_TWEETS = int(os.environ.get("FETCH_TWEETS", "40"))  # her çalışmada taranacak son tweet sayısı
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
+# Cron saatlik çalışır (GitHub zamanlanmış run'ları atlayabiliyor); son post'tan bu kadar geçmediyse çık.
+MIN_INTERVAL_H = float(os.environ.get("MIN_INTERVAL_H", "3.75"))
+FORCE = os.environ.get("FORCE") == "1"
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
 IMAGE_EXT = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp", "gif": "image/gif"}
 
@@ -121,6 +125,10 @@ def post_to_tumblr(item, state):
 
 def main():
     state = load_state()
+    elapsed_h = (time.time() - state.get("last_post_at", 0)) / 3600
+    if not FORCE and elapsed_h < MIN_INTERVAL_H:
+        print(f"son post {elapsed_h:.1f} saat önce, bekleniyor")
+        return
     seen = set(state["seen"])
 
     try:
@@ -150,6 +158,7 @@ def main():
             continue
         if not DRY_RUN:
             state["posted"].append({"tweet_id": item["tweet_id"], "tumblr_id": post_id})
+            state["last_post_at"] = int(time.time())
         print(f"post edildi: {item['url']} -> {post_id}")
         break
     else:
