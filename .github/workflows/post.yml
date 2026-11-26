@@ -2,15 +2,15 @@ name: post
 
 on:
   schedule:
-    - cron: "17 * * * *"  # saatlik; 4 saat aralığını main.py uyguluyor
+    - cron: "17 * * * *"  # hourly; main.py enforces the 4 hour interval
   workflow_dispatch:
     inputs:
       force:
-        description: "4 saat beklemeden post et"
+        description: "Post without waiting 4 hours"
         type: boolean
         default: false
       dry_run:
-        description: "Sadece dene, Tumblr'a post atma"
+        description: "Dry run, do not post to Tumblr"
         type: boolean
         default: false
 
@@ -36,6 +36,8 @@ jobs:
           FORCE: ${{ inputs.force && '1' || '' }}
           TUMBLR_BLOG: ${{ vars.TUMBLR_BLOG }}
           TUMBLR_TAGS: ${{ vars.TUMBLR_TAGS }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TAG_MODEL: ${{ vars.TAG_MODEL }}
           TUMBLR_CONSUMER_KEY: ${{ secrets.TUMBLR_CONSUMER_KEY }}
           TUMBLR_CONSUMER_SECRET: ${{ secrets.TUMBLR_CONSUMER_SECRET }}
           TUMBLR_OAUTH_TOKEN: ${{ secrets.TUMBLR_OAUTH_TOKEN }}

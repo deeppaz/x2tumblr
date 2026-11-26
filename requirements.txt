@@ -3,3 +3,4 @@ requests
 requests-oauthlib
 imagehash
 Pillow
+anthropic>=1.0

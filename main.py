@@ -1,8 +1,7 @@
-"""X (@miniocular) media timeline -> Tumblr. Her çalışmada kuyruktan 1 tweet'i post eder."""
+"""X (@miniocular) media timeline -> Tumblr. Posts one tweet from the queue per run."""
 import io
 import json
 import os
-import random
 import sys
 import time
 
@@ -14,20 +13,14 @@ from gallery_dl import config, extractor
 from gallery_dl.extractor.message import Message
 from gallery_dl.extractor.twitter import TwitterAPI
 
+from tags import pick_tags
+
 X_USER = os.environ.get("X_USER", "miniocular")
 BLOG = os.environ.get("TUMBLR_BLOG", "")
-# İlk 5 tag tracked-tag'lerde görünür -> sabit ve en güçlüler. Kalanlar havuzdan rastgele (spam gibi durmasın diye).
-CORE_TAGS = ["aesthetic", "moodboard", "quotes", "art", "mood"]
-TAG_POOL = [
-    "aesthetic blog", "mood aesthetic", "dark aesthetic", "grunge", "soft grunge", "collage", "collage art",
-    "text post", "words", "feelings", "vibes", "art blog", "digital art", "surreal", "neon", "alt aesthetic",
-    "life quotes", "thoughts", "wallpaper", "lockscreen", "tumblr aesthetic", "90s aesthetic", "graphic design",
-]
-EXTRA_TAGS = 7
-DUP_DISTANCE = 6  # phash hamming mesafesi; bunun altı = aynı görsel sayılır
-FETCH_TWEETS = int(os.environ.get("FETCH_TWEETS", "40"))  # her çalışmada taranacak son tweet sayısı
+DUP_DISTANCE = 6  # phash hamming distance; at or below this counts as the same image
+FETCH_TWEETS = int(os.environ.get("FETCH_TWEETS", "40"))  # number of latest tweets scanned per run
 DRY_RUN = os.environ.get("DRY_RUN") == "1"
-# Cron saatlik çalışır (GitHub zamanlanmış run'ları atlayabiliyor); son post'tan bu kadar geçmediyse çık.
+# Cron runs hourly (GitHub can skip scheduled runs); exit unless this long has passed since the last post.
 MIN_INTERVAL_H = float(os.environ.get("MIN_INTERVAL_H", "3.75"))
 FORCE = os.environ.get("FORCE") == "1"
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state.json")
@@ -40,11 +33,11 @@ def load_state():
             state = json.load(f)
     except FileNotFoundError:
         state = {}
-    state.setdefault("seen", [])      # kuyruğa alınmış tüm tweet id'leri
+    state.setdefault("seen", [])      # every tweet id ever queued
     state.setdefault("queue", [])     # {tweet_id, url, images:[{url, ext}]}
     state.setdefault("posted", [])    # {tweet_id, tumblr_id}
-    state.setdefault("blocked", [])   # DMCA vs. gelirse buraya tweet_id ekle, asla post edilmez
-    state.setdefault("hashes", [])    # post edilmiş görsellerin perceptual hash'leri
+    state.setdefault("blocked", [])   # add a tweet_id here on a DMCA etc.; it will never be posted
+    state.setdefault("hashes", [])    # perceptual hashes of posted images
     return state
 
 
@@ -62,8 +55,8 @@ _client_transaction = TwitterAPI._client_transaction
 
 
 def _client_transaction_or_none(self):
-    # gallery-dl transaction key'leri için x.com/home'u çekiyor; GitHub IP'lerinde Cloudflare 403 dönüyor.
-    # Alınamazsa header'sız devam et, UserMedia uç noktası yine kabul ediyor.
+    # gallery-dl fetches x.com/home for transaction keys; Cloudflare returns 403 on GitHub IPs.
+    # If that fails, go on without the header; the UserMedia endpoint still accepts the request.
     try:
         return _client_transaction(self)
     except Exception as e:
@@ -75,7 +68,7 @@ TwitterAPI._client_transaction = _client_transaction_or_none
 
 
 def fetch_recent():
-    """Son FETCH_TWEETS tweet'in görsellerini döner (en yeni önce)."""
+    """Returns the images of the latest FETCH_TWEETS tweets (newest first)."""
     config.set(("extractor", "twitter"), "cookies", {"auth_token": os.environ["X_AUTH_TOKEN"]})
     config.set(("extractor", "twitter"), "videos", False)
     config.set(("extractor", "twitter"), "retweets", False)
@@ -97,11 +90,6 @@ def fetch_recent():
             tweets[tid] = {"tweet_id": tid, "url": f"https://x.com/{author}/status/{tid}", "images": []}
         tweets[tid]["images"].append({"url": url, "ext": ext})
     return list(tweets.values())
-
-
-def pick_tags():
-    env = [t.strip() for t in os.environ.get("TUMBLR_TAGS", "").split(",") if t.strip()]
-    return env or CORE_TAGS + random.sample(TAG_POOL, EXTRA_TAGS)
 
 
 def is_dup(h, known):
@@ -130,11 +118,13 @@ def post_to_tumblr(item, state):
         files[ident] = (f"{ident}.{img['ext']}", r.content, mime)
         media.append({"type": "image", "media": [{"type": mime, "identifier": ident}]})
     if not media:
-        return None  # görseller silinmiş ya da hepsi daha önce paylaşılmış
+        return None  # images were deleted or all of them were posted before
 
-    body = {"content": media, "tags": ",".join(pick_tags())}
+    tags = pick_tags([f[1] for f in files.values()])
+    print(f"tags: {tags}")
+    body = {"content": media, "tags": ",".join(tags)}
     if DRY_RUN:
-        print("[dry-run]", json.dumps(body)[:500])
+        print("[dry-run]", json.dumps(body, ensure_ascii=False)[:1500])
         return "dry-run"
 
     files["json"] = (None, json.dumps(body), "application/json")
@@ -155,10 +145,10 @@ def main():
 
     try:
         fresh = [t for t in fetch_recent() if t["tweet_id"] not in seen]
-        state["queue"].extend(reversed(fresh))  # eskiden yeniye sırala
+        state["queue"].extend(reversed(fresh))  # oldest first
         state["seen"].extend(t["tweet_id"] for t in fresh)
         print(f"fetch: {len(fresh)} yeni tweet, kuyruk={len(state['queue'])}")
-    except Exception as e:  # X tarafı patlarsa kuyruktan devam et
+    except Exception as e:  # if X fails, carry on from the queue
         print(f"fetch hatası: {e!r}", file=sys.stderr)
 
     blocked = set(state["blocked"])
@@ -172,7 +162,7 @@ def main():
             post_id = post_to_tumblr(item, state)
         except Exception as e:
             print(f"post hatası ({item['tweet_id']}): {e}", file=sys.stderr)
-            exit_code = 1  # kuyrukta kalır, sonraki çalışmada tekrar denenir
+            exit_code = 1  # stays queued and is retried on the next run
             break
         state["queue"].pop(0)
         if post_id is None:

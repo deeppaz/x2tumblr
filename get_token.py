@@ -1,4 +1,4 @@
-"""Tumblr OAuth1 token'ını bir kez almak için (lokalde çalıştır)."""
+"""One-time helper to obtain the Tumblr OAuth1 token (run locally)."""
 from requests_oauthlib import OAuth1Session
 
 key = input("Consumer key: ").strip()
