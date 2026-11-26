@@ -94,13 +94,17 @@ def activity(tag, api_key):
             "https://api.tumblr.com/v2/tagged", params={"tag": tag, "api_key": api_key}, timeout=15
         )
         r.raise_for_status()
-        stamps = [p["timestamp"] for p in r.json()["response"] if "timestamp" in p]
+        posts = r.json()["response"]
+        if any("featured_timestamp" in p for p in posts):
+            # Tumblr's old editor-curated tags (art, vintage, portrait, ...) return a frozen feed of
+            # featured posts from years ago instead of recent ones. They are among the largest tags.
+            return float("inf")
+        stamps = [p["timestamp"] for p in posts if "timestamp" in p]
     except Exception as e:
         # Do not print e itself: requests puts the URL with api_key in the message, and logs are public on a public repo
         print(f"could not measure tag ({tag}): {type(e).__name__}", file=sys.stderr)
         return None
     now = time.time()
-    print(f"tagged {tag!r}: n={len(stamps)} ages_h={[round((now - t) / 3600, 1) for t in sorted(stamps, reverse=True)[:3]]}..{round((now - min(stamps)) / 3600, 1) if stamps else None} keys={sorted(r.json()['response'][0])[:40] if r.json()['response'] else r.text[:200]}")
     if not stamps or (now - max(stamps)) / 3600 > DEAD_AFTER_H:
         return 0.0
     return len(stamps) / max((now - min(stamps)) / 3600, 0.01)
