@@ -23,7 +23,7 @@ FALLBACK_COUNT = 12
 MAX_TAGS = 20        # Tumblr search indexes the first 20 tags of a post
 CANDIDATES = 26      # candidates requested from the model; cut down to MAX_TAGS after dead tags are dropped
 DEAD_AFTER_H = 24 * 30  # a tag whose newest post is older than this has no audience
-MODEL = os.environ.get("TAG_MODEL", "claude-sonnet-5-5")
+MODEL = os.environ.get("TAG_MODEL") or "claude-sonnet-5-5"  # the workflow passes an empty string when the variable is unset
 
 PROMPT = f"""These images are one Tumblr post on an aesthetic / moodboard blog that reposts curated images.
 Pick the tags that will get this exact post discovered by people who would enjoy it.
